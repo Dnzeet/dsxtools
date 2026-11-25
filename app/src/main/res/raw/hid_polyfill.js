@@ -54,37 +54,36 @@
 
   var devices = {};
 
-  function HIDDevice(info) {
-    EventTarget.call(this);
-    this._key = info.key;
-    this.vendorId = info.vendorId;
-    this.productId = info.productId;
-    this.productName = info.productName;
-    this.collections = info.collections;
-    this.opened = false;
-    this.oninputreport = null;
+  class HIDDevice extends EventTarget {
+    constructor(info) {
+      super();
+      this._key = info.key;
+      this.vendorId = info.vendorId;
+      this.productId = info.productId;
+      this.productName = info.productName;
+      this.collections = info.collections;
+      this.opened = false;
+      this.oninputreport = null;
+    }
+    async open() {
+      await call('open', { key: this._key });
+      this.opened = true;
+    }
+    async close() {
+      try { await call('close', { key: this._key }); } finally { this.opened = false; }
+    }
+    async sendReport(reportId, data) {
+      await call('sendReport', { key: this._key, reportId: reportId, data: b64(toU8(data)) });
+    }
+    async sendFeatureReport(reportId, data) {
+      await call('sendFeatureReport', { key: this._key, reportId: reportId, data: b64(toU8(data)) });
+    }
+    async receiveFeatureReport(reportId) {
+      var r = await call('receiveFeatureReport', { key: this._key, reportId: reportId });
+      var u8 = unb64(r.data);
+      return new DataView(u8.buffer, 0, u8.length);
+    }
   }
-  HIDDevice.prototype = Object.create(EventTarget.prototype);
-  HIDDevice.prototype.constructor = HIDDevice;
-
-  HIDDevice.prototype.open = async function () {
-    await call('open', { key: this._key });
-    this.opened = true;
-  };
-  HIDDevice.prototype.close = async function () {
-    try { await call('close', { key: this._key }); } finally { this.opened = false; }
-  };
-  HIDDevice.prototype.sendReport = async function (reportId, data) {
-    await call('sendReport', { key: this._key, reportId: reportId, data: b64(toU8(data)) });
-  };
-  HIDDevice.prototype.sendFeatureReport = async function (reportId, data) {
-    await call('sendFeatureReport', { key: this._key, reportId: reportId, data: b64(toU8(data)) });
-  };
-  HIDDevice.prototype.receiveFeatureReport = async function (reportId) {
-    var r = await call('receiveFeatureReport', { key: this._key, reportId: reportId });
-    var u8 = unb64(r.data);
-    return new DataView(u8.buffer, 0, u8.length);
-  };
 
   function wrap(info) {
     var d = devices[info.key];
