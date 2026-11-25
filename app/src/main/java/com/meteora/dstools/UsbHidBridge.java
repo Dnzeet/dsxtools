@@ -256,15 +256,39 @@ public class UsbHidBridge {
         dev.conn = usb.openDevice(d);
         if (dev.conn == null) throw new IOException("Gagal membuka perangkat USB");
 
+        // Claim dulu (force) agar kernel melepas interface, lalu baca descriptor
+        boolean claimed = dev.conn.claimInterface(dev.iface, true);
+        log("claimInterface(awal) = " + claimed);
+
+        int exact = -1;
+        byte[] rawCfg = dev.conn.getRawDescriptors();
+        if (rawCfg != null) exact = hidReportDescLength(rawCfg, dev.iface.getId());
+        log("panjang report descriptor (dari config) = " + exact);
+
+        int[] sizes = exact > 0
+                ? new int[]{exact, 512, 1024, 256, 4096}
+                : new int[]{512, 1024, 256, 4096, 128};
         byte[] buf = new byte[4096];
         int n = -1;
-        for (int attempt = 0; attempt < 2 && n <= 0; attempt++) {
+        StringBuilder tried = new StringBuilder();
+        for (int size : sizes) {
+            if (size > buf.length) continue;
             // GET_DESCRIPTOR (HID report descriptor), standard | interface
-            n = dev.conn.controlTransfer(0x81, 0x06, 0x2200, dev.iface.getId(), buf, buf.length, 2000);
+            n = dev.conn.controlTransfer(0x81, 0x06, 0x2200, dev.iface.getId(), buf, size, 2000);
+            tried.append(size).append("->").append(n).append(' ');
+            log("GET_DESCRIPTOR len=" + size + " hasil=" + n);
+            if (n > 0) break;
+        }
+        if (claimed) {
+            try {
+                dev.conn.releaseInterface(dev.iface);
+            } catch (Exception ignored) {
+            }
         }
         if (n <= 0) {
             dev.conn.close();
-            throw new IOException("Gagal membaca HID report descriptor");
+            throw new IOException("Gagal membaca HID report descriptor (claim=" + claimed
+                    + ", config=" + exact + ", coba: " + tried.toString().trim() + ")");
         }
         dev.desc = HidDescriptor.parse(buf, n);
         if (dev.desc.collections.isEmpty()) {
@@ -275,6 +299,29 @@ public class UsbHidBridge {
         log(String.format(Locale.US, "Perangkat %04x:%04x (%s), iface %d, descriptor %d byte",
                 d.getVendorId(), d.getProductId(), d.getDeviceName(), dev.iface.getId(), n));
         return dev;
+    }
+
+    /** Cari panjang HID report descriptor (wDescriptorLength) untuk interface tertentu dari config descriptor mentah. */
+    static int hidReportDescLength(byte[] raw, int ifaceNum) {
+        int i = 0;
+        boolean inIface = false;
+        while (i + 2 <= raw.length) {
+            int len = raw[i] & 0xFF;
+            if (len < 2 || i + len > raw.length) break;
+            int type = raw[i + 1] & 0xFF;
+            if (type == 0x04 && len >= 9) {
+                inIface = (raw[i + 2] & 0xFF) == ifaceNum;
+            } else if (type == 0x21 && inIface && len >= 9) {
+                int num = raw[i + 5] & 0xFF;
+                for (int k = 0; k < num && i + 8 + 3 * k < i + len; k++) {
+                    if ((raw[i + 6 + 3 * k] & 0xFF) == 0x22) {
+                        return (raw[i + 7 + 3 * k] & 0xFF) | ((raw[i + 8 + 3 * k] & 0xFF) << 8);
+                    }
+                }
+            }
+            i += len;
+        }
+        return -1;
     }
 
     private JSONObject info(UsbDevice d) throws Exception {
