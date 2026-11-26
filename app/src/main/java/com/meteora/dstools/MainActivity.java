@@ -24,7 +24,6 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -47,8 +46,6 @@ public class MainActivity extends Activity {
     private UsbHidBridge bridge;
     private LinearLayout bar;
     private TextView statusView;
-    private Switch writeSwitch;
-    private boolean ignoreSwitch;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -85,17 +82,6 @@ public class MainActivity extends Activity {
         bar.addView(logBtn, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        writeSwitch = new Switch(this);
-        writeSwitch.setText("Write ");
-        writeSwitch.setTextColor(0xFF000000);
-        writeSwitch.setOnCheckedChangeListener((btn, checked) -> {
-            if (ignoreSwitch) return;
-            if (checked) confirmWriteMode();
-            else setWrite(false);
-        });
-        bar.addView(writeSwitch, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
         web = new WebView(this);
 
         root.addView(bar, new LinearLayout.LayoutParams(
@@ -103,35 +89,12 @@ public class MainActivity extends Activity {
         root.addView(web, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
+        updateBar();
     }
 
-    private void updateBar(boolean on) {
-        statusView.setText(on ? "Write mode ON - don't unplug during calibration" : "Read-only mode (safe)");
-        bar.setBackgroundColor(on ? 0xFFFFCDD2 : 0xFFC8E6C9);
-    }
-
-    private void setSwitchSilently(boolean checked) {
-        ignoreSwitch = true;
-        writeSwitch.setChecked(checked);
-        ignoreSwitch = false;
-    }
-
-    private void setWrite(boolean on) {
-        if (bridge != null) bridge.setWriteEnabled(on);
-        updateBar(on);
-    }
-
-    private void confirmWriteMode() {
-        new AlertDialog.Builder(this)
-                .setTitle("Turn on Write mode?")
-                .setMessage("This allows calibration to write to the controller's memory.\n\n"
-                        + "- Use a solid USB/OTG cable\n"
-                        + "- Keep the phone and controller charged\n"
-                        + "- Don't unplug or switch apps during calibration")
-                .setPositiveButton("Turn on", (d, w) -> setWrite(true))
-                .setNegativeButton("Cancel", (d, w) -> setSwitchSilently(false))
-                .setOnCancelListener(d -> setSwitchSilently(false))
-                .show();
+    private void updateBar() {
+        statusView.setText("Don't unplug the controller during calibration");
+        bar.setBackgroundColor(0xFFE0E0E0);
     }
 
     private void setupWebView() {
@@ -203,10 +166,6 @@ public class MainActivity extends Activity {
 
         bridge = new UsbHidBridge(this, web);
         web.addJavascriptInterface(bridge, "AndroidHID");
-
-        // Write mode is ON by default; reflect the bridge state in the UI
-        setSwitchSilently(bridge.isWriteEnabled());
-        updateBar(bridge.isWriteEnabled());
 
         web.loadUrl(START_URL);
     }
