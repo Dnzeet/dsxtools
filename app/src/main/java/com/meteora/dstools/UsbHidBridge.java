@@ -45,14 +45,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class UsbHidBridge {
 
-    public interface Listener {
-        void onWriteModeReset();
-    }
-
     private static final String TAG = "DSTools";
     private static final String ACTION_PERM = "com.meteora.dstools.USB_PERMISSION";
     private static final String MSG_READONLY =
-            "Mode BACA-SAJA aktif: operasi tulis/kalibrasi diblokir. Aktifkan Mode Tulis dari bar atas aplikasi.";
+            "Read-only mode is on: write/calibration commands are blocked. Turn on Write from the top bar.";
 
     private static final int RT_IN = 0xA1;   // device-to-host | class | interface
     private static final int RT_OUT = 0x21;  // host-to-device | class | interface
@@ -81,7 +77,6 @@ public class UsbHidBridge {
 
     private final Context ctx;
     private final WebView web;
-    private final Listener listener;
     private final UsbManager usb;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
@@ -90,20 +85,20 @@ public class UsbHidBridge {
     private final AtomicInteger inFlight = new AtomicInteger();
     private final ArrayDeque<String> logBuf = new ArrayDeque<>();
     private final SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm:ss.SSS", Locale.US);
-    private volatile boolean writeEnabled = false;
+    private volatile boolean writeEnabled = true;   // write mode ON by default
+    private volatile boolean calibrating = false;
     private volatile boolean destroyed = false;
 
-    public UsbHidBridge(Context context, WebView webView, Listener listener) {
+    public UsbHidBridge(Context context, WebView webView) {
         this.ctx = context.getApplicationContext();
         this.web = webView;
-        this.listener = listener;
         this.usb = (UsbManager) ctx.getSystemService(Context.USB_SERVICE);
 
         IntentFilter f = new IntentFilter();
         f.addAction(ACTION_PERM);
         f.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         ContextCompat.registerReceiver(ctx, receiver, f, ContextCompat.RECEIVER_NOT_EXPORTED);
-        log("Bridge siap");
+        log("Bridge ready");
     }
 
     // ------------------------------------------------------------------ public
@@ -112,9 +107,13 @@ public class UsbHidBridge {
         return writeEnabled;
     }
 
+    public boolean isCalibrating() {
+        return calibrating;
+    }
+
     public void setWriteEnabled(boolean on) {
         writeEnabled = on;
-        log(on ? "MODE TULIS: AKTIF" : "MODE TULIS: nonaktif (baca-saja)");
+        log(on ? "WRITE MODE: ON" : "WRITE MODE: OFF (read-only)");
     }
 
     public synchronized String dumpLog() {
@@ -154,7 +153,7 @@ public class UsbHidBridge {
                 }
             });
         } catch (Exception e) {
-            deliver(id, false, "Bridge tidak tersedia");
+            deliver(id, false, "Bridge unavailable");
         }
     }
 
@@ -167,7 +166,7 @@ public class UsbHidBridge {
             case "sendReport": return sendOutput(a);
             case "sendFeatureReport": return sendFeature(a);
             case "receiveFeatureReport": return receiveFeature(a);
-            default: throw new IOException("Method tidak dikenal: " + method);
+            default: throw new IOException("Unknown method: " + method);
         }
     }
 
@@ -189,7 +188,7 @@ public class UsbHidBridge {
             if (findHidInterface(d) == null) continue;
             if (!matches(d, filters)) continue;
             if (!usb.hasPermission(d)) {
-                if (!askPermission(d)) throw new IOException("NotAllowedError: izin USB ditolak");
+                if (!askPermission(d)) throw new IOException("NotAllowedError: USB permission denied");
             }
             out.put(info(d));
             break;
@@ -246,7 +245,7 @@ public class UsbHidBridge {
         dev = new Dev();
         dev.dev = d;
         dev.iface = findHidInterface(d);
-        if (dev.iface == null) throw new IOException("Interface HID tidak ditemukan");
+        if (dev.iface == null) throw new IOException("HID interface not found");
         for (int e = 0; e < dev.iface.getEndpointCount(); e++) {
             UsbEndpoint ep = dev.iface.getEndpoint(e);
             if (ep.getType() != UsbConstants.USB_ENDPOINT_XFER_INT) continue;
@@ -254,16 +253,16 @@ public class UsbHidBridge {
             if (ep.getDirection() == UsbConstants.USB_DIR_OUT && dev.epOut == null) dev.epOut = ep;
         }
         dev.conn = usb.openDevice(d);
-        if (dev.conn == null) throw new IOException("Gagal membuka perangkat USB");
+        if (dev.conn == null) throw new IOException("Failed to open USB device");
 
         // Claim dulu (force) agar kernel melepas interface, lalu baca descriptor
         boolean claimed = dev.conn.claimInterface(dev.iface, true);
-        log("claimInterface(awal) = " + claimed);
+        log("claimInterface(initial) = " + claimed);
 
         int exact = -1;
         byte[] rawCfg = dev.conn.getRawDescriptors();
         if (rawCfg != null) exact = hidReportDescLength(rawCfg, dev.iface.getId());
-        log("panjang report descriptor (dari config) = " + exact);
+        log("report descriptor length (from config) = " + exact);
 
         int[] sizes = exact > 0
                 ? new int[]{exact, 512, 1024, 256, 4096}
@@ -276,7 +275,7 @@ public class UsbHidBridge {
             // GET_DESCRIPTOR (HID report descriptor), standard | interface
             n = dev.conn.controlTransfer(0x81, 0x06, 0x2200, dev.iface.getId(), buf, size, 2000);
             tried.append(size).append("->").append(n).append(' ');
-            log("GET_DESCRIPTOR len=" + size + " hasil=" + n);
+            log("GET_DESCRIPTOR len=" + size + " result=" + n);
             if (n > 0) break;
         }
         if (claimed) {
@@ -287,16 +286,16 @@ public class UsbHidBridge {
         }
         if (n <= 0) {
             dev.conn.close();
-            throw new IOException("Gagal membaca HID report descriptor (claim=" + claimed
-                    + ", config=" + exact + ", coba: " + tried.toString().trim() + ")");
+            throw new IOException("Failed to read HID report descriptor (claim=" + claimed
+                    + ", config=" + exact + ", tried: " + tried.toString().trim() + ")");
         }
         dev.desc = HidDescriptor.parse(buf, n);
         if (dev.desc.collections.isEmpty()) {
             dev.conn.close();
-            throw new IOException("HID report descriptor tidak valid");
+            throw new IOException("Invalid HID report descriptor");
         }
         devs.put(d.getDeviceName(), dev);
-        log(String.format(Locale.US, "Perangkat %04x:%04x (%s), iface %d, descriptor %d byte",
+        log(String.format(Locale.US, "Device %04x:%04x (%s), iface %d, descriptor %d bytes",
                 d.getVendorId(), d.getProductId(), d.getDeviceName(), dev.iface.getId(), n));
         return dev;
     }
@@ -368,20 +367,20 @@ public class UsbHidBridge {
 
     private Dev need(String key) throws Exception {
         Dev d = devs.get(key);
-        if (d == null) throw new IOException("Perangkat tidak ditemukan / sudah dicabut");
+        if (d == null) throw new IOException("Device not found / unplugged");
         return d;
     }
 
     private Dev needOpen(String key) throws Exception {
         Dev d = need(key);
-        if (!d.open) throw new IOException("Perangkat belum dibuka");
+        if (!d.open) throw new IOException("Device is not open");
         return d;
     }
 
     private String openDev(String key) throws Exception {
         final Dev d = need(key);
         if (d.open) return "{}";
-        if (!d.conn.claimInterface(d.iface, true)) throw new IOException("claimInterface gagal");
+        if (!d.conn.claimInterface(d.iface, true)) throw new IOException("claimInterface failed");
         d.open = true;
         d.reader = new Thread(() -> readLoop(key, d), "hid-read");
         d.reader.start();
@@ -398,7 +397,7 @@ public class UsbHidBridge {
         } catch (Exception ignored) {
         }
         log("CLOSE " + key);
-        resetWrite();
+        calibrating = false;
         return "{}";
     }
 
@@ -417,22 +416,14 @@ public class UsbHidBridge {
     private void handleDetached(String name) {
         Dev d = devs.remove(name);
         if (d == null) return;
-        log("DICABUT " + name);
+        log("UNPLUGGED " + name);
         stopReader(d);
         try {
             if (d.conn != null) d.conn.close();
         } catch (Exception ignored) {
         }
+        calibrating = false;
         evalJs("window.__hidDisconnect(" + JSONObject.quote(name) + ")", null);
-        resetWrite();
-    }
-
-    private void resetWrite() {
-        if (writeEnabled) {
-            writeEnabled = false;
-            log("MODE TULIS dikembalikan ke baca-saja");
-            if (listener != null) listener.onWriteModeReset();
-        }
     }
 
     // ------------------------------------------------------------------ input
@@ -479,7 +470,7 @@ public class UsbHidBridge {
         if (rid == 0xA0 && b0 == 10 && b1 == 2) return true;  // DS4: NVS unlock
         if (rid == 0x82) return true;                         // DS5/Edge: kalibrasi
         if (rid == 0x80 && b0 == 3 && b1 == 2) return true;   // DS5/Edge: NVS unlock
-        if (rid == 0x80 && b0 == 12 && b1 == 1) return true;  // DS5: tulis finetune
+        if (rid == 0x80 && b0 == 12 && b1 == 1) return true;  // DS5: write finetune
         return false;
     }
 
@@ -490,7 +481,7 @@ public class UsbHidBridge {
         System.arraycopy(data, 0, raw, withId ? 1 : 0, data.length);
         if (expected > 0) {
             if (raw.length > expected) {
-                throw new IOException("Panjang report " + raw.length + " melebihi descriptor (" + expected + ")");
+                throw new IOException("Report length " + raw.length + " exceeds descriptor (" + expected + ")");
             }
             if (raw.length < expected) raw = Arrays.copyOf(raw, expected);
         }
@@ -503,7 +494,7 @@ public class UsbHidBridge {
         byte[] data = Base64.decode(a.optString("data", ""), Base64.DEFAULT);
 
         if (!writeEnabled && isMutating(rid, data)) {
-            log("BLOKIR feature 0x" + hex(rid) + " " + hexDump(data, 16) + " (mode baca-saja)");
+            log("BLOCKED feature 0x" + hex(rid) + " " + hexDump(data, 16) + " (read-only mode)");
             throw new IOException(MSG_READONLY);
         }
 
@@ -511,7 +502,12 @@ public class UsbHidBridge {
         log("FEAT-TX 0x" + hex(rid) + " len=" + buf.length + " " + hexDump(buf, 24));
         int n = d.conn.controlTransfer(RT_OUT, REQ_SET_REPORT, (RPT_FEATURE << 8) | rid,
                 d.iface.getId(), buf, buf.length, CTRL_TIMEOUT);
-        if (n < 0) throw new IOException("SET_REPORT gagal (0x" + hex(rid) + ")");
+        if (n < 0) throw new IOException("SET_REPORT failed (0x" + hex(rid) + ")");
+        if ((rid == 0x90 || rid == 0x82) && data.length > 0) {
+            int step = data[0] & 0xFF;
+            if (step == 1) calibrating = true;       // calibration begin
+            else if (step == 2) calibrating = false; // calibration end/write
+        }
         return "{}";
     }
 
@@ -523,7 +519,7 @@ public class UsbHidBridge {
         byte[] buf = new byte[size];
         int n = d.conn.controlTransfer(RT_IN, REQ_GET_REPORT, (RPT_FEATURE << 8) | rid,
                 d.iface.getId(), buf, size, CTRL_TIMEOUT);
-        if (n < 0) throw new IOException("GET_REPORT gagal (0x" + hex(rid) + ")");
+        if (n < 0) throw new IOException("GET_REPORT failed (0x" + hex(rid) + ")");
         JSONObject o = new JSONObject();
         o.put("data", Base64.encodeToString(buf, 0, n, Base64.NO_WRAP));
         return o.toString();
@@ -541,7 +537,7 @@ public class UsbHidBridge {
             n = d.conn.controlTransfer(RT_OUT, REQ_SET_REPORT, (RPT_OUTPUT << 8) | rid,
                     d.iface.getId(), buf, buf.length, CTRL_TIMEOUT);
         }
-        if (n < 0) throw new IOException("Output report gagal (0x" + hex(rid) + ")");
+        if (n < 0) throw new IOException("Output report failed (0x" + hex(rid) + ")");
         return "{}";
     }
 

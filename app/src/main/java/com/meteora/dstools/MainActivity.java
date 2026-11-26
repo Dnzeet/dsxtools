@@ -53,7 +53,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Layar tetap menyala supaya proses kalibrasi tidak terputus
+        // Keep the screen on so calibration is not interrupted
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         buildUi();
         setupWebView();
@@ -86,7 +86,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         writeSwitch = new Switch(this);
-        writeSwitch.setText("Tulis ");
+        writeSwitch.setText("Write ");
         writeSwitch.setTextColor(0xFF000000);
         writeSwitch.setOnCheckedChangeListener((btn, checked) -> {
             if (ignoreSwitch) return;
@@ -103,11 +103,10 @@ public class MainActivity extends Activity {
         root.addView(web, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
-        updateBar(false);
     }
 
     private void updateBar(boolean on) {
-        statusView.setText(on ? "MODE TULIS AKTIF - jangan cabut kabel" : "Mode baca-saja (aman)");
+        statusView.setText(on ? "Write mode ON - don't unplug during calibration" : "Read-only mode (safe)");
         bar.setBackgroundColor(on ? 0xFFFFCDD2 : 0xFFC8E6C9);
     }
 
@@ -124,14 +123,13 @@ public class MainActivity extends Activity {
 
     private void confirmWriteMode() {
         new AlertDialog.Builder(this)
-                .setTitle("Aktifkan Mode Tulis?")
-                .setMessage("Mode ini mengizinkan kalibrasi yang menulis ke memori kontroler.\n\n"
-                        + "- Pakai kabel USB/OTG yang kokoh\n"
-                        + "- Baterai HP dan kontroler cukup\n"
-                        + "- Jangan cabut kabel atau pindah aplikasi saat proses berjalan\n\n"
-                        + "Mode tulis otomatis mati jika kabel dicabut atau koneksi ditutup.")
-                .setPositiveButton("Aktifkan", (d, w) -> setWrite(true))
-                .setNegativeButton("Batal", (d, w) -> setSwitchSilently(false))
+                .setTitle("Turn on Write mode?")
+                .setMessage("This allows calibration to write to the controller's memory.\n\n"
+                        + "- Use a solid USB/OTG cable\n"
+                        + "- Keep the phone and controller charged\n"
+                        + "- Don't unplug or switch apps during calibration")
+                .setPositiveButton("Turn on", (d, w) -> setWrite(true))
+                .setNegativeButton("Cancel", (d, w) -> setSwitchSilently(false))
                 .setOnCancelListener(d -> setSwitchSilently(false))
                 .show();
     }
@@ -190,7 +188,7 @@ public class MainActivity extends Activity {
                 new AlertDialog.Builder(MainActivity.this)
                         .setMessage(message)
                         .setPositiveButton("OK", (d, w) -> result.confirm())
-                        .setNegativeButton("Batal", (d, w) -> result.cancel())
+                        .setNegativeButton("Cancel", (d, w) -> result.cancel())
                         .setOnCancelListener(d -> result.cancel())
                         .show();
                 return true;
@@ -203,15 +201,17 @@ public class MainActivity extends Activity {
             }
         });
 
-        bridge = new UsbHidBridge(this, web, () -> runOnUiThread(() -> {
-            setSwitchSilently(false);
-            updateBar(false);
-        }));
+        bridge = new UsbHidBridge(this, web);
         web.addJavascriptInterface(bridge, "AndroidHID");
+
+        // Write mode is ON by default; reflect the bridge state in the UI
+        setSwitchSilently(bridge.isWriteEnabled());
+        updateBar(bridge.isWriteEnabled());
+
         web.loadUrl(START_URL);
     }
 
-    /** Menyajikan index.html dengan polyfill navigator.hid disisipkan paling awal. */
+    /** Serves index.html with the navigator.hid polyfill injected at the very top. */
     private WebResourceResponse indexResponse() {
         try {
             String html = new String(readAll(getAssets().open("index.html")), StandardCharsets.UTF_8);
@@ -228,7 +228,7 @@ public class MainActivity extends Activity {
             return new WebResourceResponse("text/html", "UTF-8",
                     new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)));
         } catch (IOException e) {
-            Log.e("DSTools", "Gagal membaca index.html", e);
+            Log.e("DSTools", "Failed to read index.html", e);
             return null;
         }
     }
@@ -250,29 +250,30 @@ public class MainActivity extends Activity {
         tv.setTextSize(11);
         tv.setPadding(dp(12), dp(8), dp(12), dp(8));
         tv.setTextIsSelectable(true);
-        tv.setText(text.isEmpty() ? "(log kosong)" : text);
+        tv.setText(text.isEmpty() ? "(log is empty)" : text);
         ScrollView sv = new ScrollView(this);
         sv.addView(tv);
         new AlertDialog.Builder(this)
-                .setTitle("Log USB")
+                .setTitle("USB log")
                 .setView(sv)
-                .setPositiveButton("Salin", (d, w) -> {
+                .setPositiveButton("Copy", (d, w) -> {
                     ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                     cm.setPrimaryClip(ClipData.newPlainText("log", text));
-                    Toast.makeText(this, "Log disalin", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "Log copied", Toast.LENGTH_SHORT).show();
                 })
-                .setNegativeButton("Tutup", null)
+                .setNegativeButton("Close", null)
                 .show();
     }
 
     @Override
     public void onBackPressed() {
-        if (bridge != null && bridge.isWriteEnabled()) {
+        // Only warn when a calibration is actually in progress
+        if (bridge != null && bridge.isCalibrating()) {
             new AlertDialog.Builder(this)
-                    .setTitle("Mode tulis masih aktif")
-                    .setMessage("Keluar sekarang bisa memutus proses kalibrasi. Yakin keluar?")
-                    .setPositiveButton("Keluar", (d, w) -> finish())
-                    .setNegativeButton("Tetap di sini", null)
+                    .setTitle("Calibration in progress")
+                    .setMessage("Leaving now may interrupt it. Exit anyway?")
+                    .setPositiveButton("Exit", (d, w) -> finish())
+                    .setNegativeButton("Stay", null)
                     .show();
             return;
         }
