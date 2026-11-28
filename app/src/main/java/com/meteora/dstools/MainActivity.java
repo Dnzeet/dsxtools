@@ -7,10 +7,13 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.ConsoleMessage;
@@ -61,31 +64,55 @@ public class MainActivity extends Activity {
     }
 
     private void buildUi() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            getWindow().setStatusBarColor(0xFF121215);
+            getWindow().setNavigationBarColor(0xFF0B0B0D);
+        }
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(0xFF0B0B0D);
 
         bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(10), dp(4), dp(10), dp(4));
+        bar.setPadding(dp(14), dp(8), dp(14), dp(8));
 
         statusView = new TextView(this);
-        statusView.setTextSize(13);
-        statusView.setTypeface(Typeface.DEFAULT_BOLD);
-        statusView.setTextColor(0xFF000000);
+        statusView.setTextSize(12);
+        statusView.setTypeface(Typeface.DEFAULT);
+        statusView.setTextColor(0xFF8E8E98);
         bar.addView(statusView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         Button logBtn = new Button(this);
-        logBtn.setText("Log");
+        logBtn.setText("USB Log");
         logBtn.setAllCaps(false);
+        logBtn.setTextSize(12);
+        logBtn.setTextColor(0xFFF4F4F5);
+        logBtn.setPadding(dp(10), dp(4), dp(10), dp(4));
+        logBtn.setMinimumHeight(0);
+        logBtn.setMinHeight(0);
+        logBtn.setMinimumWidth(0);
+        logBtn.setMinWidth(0);
+        GradientDrawable btnBg = new GradientDrawable();
+        btnBg.setColor(0xFF1A1A20);
+        btnBg.setCornerRadius(dp(6));
+        btnBg.setStroke(dp(1), 0xFF2A2A32);
+        logBtn.setBackground(btnBg);
         logBtn.setOnClickListener(v -> showLog());
         bar.addView(logBtn, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        View divider = new View(this);
+        divider.setBackgroundColor(0xFF222228);
+
         web = new WebView(this);
+        web.setBackgroundColor(0xFF0B0B0D);
 
         root.addView(bar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(divider, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1))));
         root.addView(web, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
@@ -93,8 +120,8 @@ public class MainActivity extends Activity {
     }
 
     private void updateBar() {
-        statusView.setText("Don't unplug the controller during calibration");
-        bar.setBackgroundColor(0xFFE0E0E0);
+        statusView.setText("Keep USB connected during calibration");
+        bar.setBackgroundColor(0xFF121215);
     }
 
     private void setupWebView() {
