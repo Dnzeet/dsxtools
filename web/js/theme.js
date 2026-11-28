@@ -53,7 +53,7 @@ import { Storage } from './storage.js';
    * @summary: switch the colors of the SVG elements based on the current theme.
    */
   function switchSvgColors() {
-    const defaultColor = Storage.preferredTheme.get() === 'dark' ? '#2b3035' : '#ffffff';
+    const defaultColor = Storage.preferredTheme.get() === 'dark' ? '#121215' : '#ffffff';
     ['Controller_infills', 'Button_infills', 'L3_infill', 'R3_infill', 'Trackpad_infill', 'L1_infill', 'R1_infill'].forEach(id => {
         const group = document.getElementById(id);
           if (group) {
